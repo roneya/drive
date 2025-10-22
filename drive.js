@@ -1,108 +1,101 @@
 // drive-api.js
-window.DriveAPI = (() => {
-  let accessToken = null;
-  let userEmail = null;
+import express from "express";
+import multer from "multer";
+import fetch from "node-fetch";
 
-  // 🔹 Load Google Identity Services dynamically
-  async function loadGoogleSDK() {
-    if (window.google && window.google.accounts) return;
-    await new Promise((resolve) => {
-      const script = document.createElement("script");
-      script.src = "https://accounts.google.com/gsi/client";
-      script.async = true;
-      script.defer = true;
-      script.onload = resolve;
-      document.head.appendChild(script);
-    });
-  }
+const app = express();
+const upload = multer({ storage: multer.memoryStorage() });
+app.use(express.json());
 
-  // 🔹 1️⃣ AUTH API — get Drive access token
-  async function auth(context) {
-    if (!context?.client_id) throw new Error("client_id missing in request context");
-    await loadGoogleSDK();
+const PORT = process.env.PORT || 3000;
 
-    return new Promise((resolve, reject) => {
-      try {
-        const tokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: context.client_id,
-          scope: "openid email https://www.googleapis.com/auth/drive.file",
-          callback: async (tokenResponse) => {
-            accessToken = tokenResponse.access_token;
+// 🧠 Utility: Upload a file to Google Drive
+async function uploadFileToDrive(fileBuffer, fileName, accessToken, folderId) {
+  const metadata = folderId
+    ? { name: fileName, parents: [folderId] }
+    : { name: fileName };
 
-            // Extract email (optional)
-            if (tokenResponse.id_token) {
-              const payload = JSON.parse(atob(tokenResponse.id_token.split(".")[1]));
-              userEmail = payload.email;
-            }
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  form.append("file", new Blob([fileBuffer]));
 
-            resolve({
-              success: true,
-              access_token: accessToken,
-              email: userEmail,
-              message: "Drive access granted",
-            });
-          },
-        });
+  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + accessToken },
+    body: form,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || "Upload failed.");
 
-        tokenClient.requestAccessToken({ prompt: "consent" });
-      } catch (err) {
-        reject({ success: false, error: err.message });
-      }
-    });
-  }
+  // Make file public
+  await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + accessToken,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ role: "reader", type: "anyone" }),
+  });
 
-  // 🔹 2️⃣ UPLOAD API — upload file and return public link
-  async function upload(file, context) {
-    if (!context?.client_id) throw new Error("client_id missing in request context");
-    if (!accessToken) throw new Error("Please authenticate first using DriveAPI.auth()");
-    if (!file) throw new Error("No file provided");
+  // Get public URLs
+  const linkRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${data.id}?fields=webViewLink,webContentLink`,
+    { headers: { Authorization: "Bearer " + accessToken } }
+  );
+  const links = await linkRes.json();
 
-    const folderId = context.folder_id || null;
+  return {
+    success: true,
+    file_id: data.id,
+    view_url: links.webViewLink,
+    download_url: links.webContentLink,
+  };
+}
 
-    // Build metadata (use folder if provided)
-    const metadata = folderId ? { name: file.name, parents: [folderId] } : { name: file.name };
-    const form = new FormData();
-    form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-    form.append("file", file);
+// === 1️⃣ /auth endpoint ===
+// Note: this just returns the OAuth URL — Render can’t open popups.
+app.post("/auth", async (req, res) => {
+  try {
+    const { client_id, redirect_uri } = req.body;
 
-    // Upload
-    const uploadRes = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + accessToken },
-      body: form,
-    });
-    const uploadData = await uploadRes.json();
-    if (uploadData.error) throw new Error(uploadData.error.message);
+    if (!client_id) {
+      return res.status(400).json({ error: "Missing client_id" });
+    }
 
-    // Make public
-    await fetch(`https://www.googleapis.com/drive/v3/files/${uploadData.id}/permissions`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + accessToken,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ role: "reader", type: "anyone" }),
-    });
-
-    // Get URLs
-    const linkRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files/${uploadData.id}?fields=webViewLink,webContentLink`,
-      { headers: { Authorization: "Bearer " + accessToken } }
+    const redirect = encodeURIComponent(
+      redirect_uri || "https://developers.google.com/oauthplayground"
     );
-    const linkData = await linkRes.json();
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${client_id}&response_type=token&scope=https://www.googleapis.com/auth/drive.file%20openid%20email&redirect_uri=${redirect}`;
 
-    return {
+    res.json({
       success: true,
-      file_id: uploadData.id,
-      view_url: linkData.webViewLink,
-      download_url: linkData.webContentLink,
-    };
+      auth_url: authUrl,
+      message: "Open this URL to authorize and get your access_token.",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
+});
 
-  // 🔹 Optional helper
-  function isAuthed() {
-    return !!accessToken;
+// === 2️⃣ /upload endpoint ===
+app.post("/upload", upload.single("file"), async (req, res) => {
+  try {
+    const { client_id, access_token, folder_id } = req.body;
+    const file = req.file;
+
+    if (!client_id) return res.status(400).json({ error: "Missing client_id" });
+    if (!access_token) return res.status(400).json({ error: "Missing access_token" });
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const result = await uploadFileToDrive(file.buffer, file.originalname, access_token, folder_id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
+});
 
-  return { auth, upload, isAuthed };
-})();
+// === 3️⃣ Health check ===
+app.get("/", (req, res) => res.send("🚀 Drive API is live on Render!"));
+
+// === Start server ===
+app.listen(PORT, () => console.log(`✅ Drive API running on port ${PORT}`));
