@@ -1,34 +1,178 @@
-// drive-api.js
+// drive-web.js
 import express from "express";
-import multer from "multer";
-import fetch from "node-fetch";
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage() });
-app.use(express.json());
-
 const PORT = process.env.PORT || 3000;
 
-// 🧠 Utility: Upload a file to Google Drive
-async function uploadFileToDrive(fileBuffer, fileName, accessToken, folderId) {
-  const metadata = folderId
-    ? { name: fileName, parents: [folderId] }
-    : { name: fileName };
+// serve main HTML directly
+app.get("/", (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Google Drive Upload Demo</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  body {
+    font-family: Inter, sans-serif;
+    background: linear-gradient(135deg, #f0f4ff, #fefefe);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    text-align: center;
+  }
+  h1 { color: #1a237e; margin-bottom: 5px; }
+  input, button {
+    margin: 8px;
+    padding: 10px 20px;
+    font-size: 16px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  button {
+    background-color: #1565c0;
+    color: white;
+  }
+  button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+  }
+  #link a { color: #1565c0; text-decoration: none; }
+  .hidden { display: none; }
+  .input-box {
+    margin: 10px;
+  }
+  .radio-group {
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+  <h1>Google Drive Upload Demo</h1>
 
+  <div id="clientIdSection" class="input-box">
+    <p>Enter your <b>Google OAuth Client ID</b> to get started:</p>
+    <input type="text" id="clientIdInput" placeholder="your-client-id.apps.googleusercontent.com" size="40"/>
+    <button id="saveClientIdBtn">Continue</button>
+  </div>
+
+  <div id="mainSection" class="hidden">
+    <button id="loginBtn">Sign in with Google</button>
+    <button id="logoutBtn" style="display:none;background:#b71c1c;">Logout</button>
+    <p id="userInfo"></p>
+    <p id="status"></p>
+
+    <input type="file" id="fileInput" disabled />
+    <div class="radio-group">
+      <label><input type="radio" name="visibility" value="private" checked /> Private</label>
+      <label><input type="radio" name="visibility" value="public" /> Public</label>
+    </div>
+
+    <button id="uploadBtn" disabled>Upload</button>
+
+    <div id="link"></div>
+  </div>
+
+<script>
+let accessToken = null;
+let tokenClient = null;
+let userEmail = null;
+const LS_KEY = "driveAuth";
+const LS_CLIENT_ID = "driveClientId";
+
+window.onload = async () => {
+  const savedClientId = localStorage.getItem(LS_CLIENT_ID);
+  if (savedClientId) {
+    document.getElementById("clientIdInput").value = savedClientId;
+    initApp(savedClientId);
+  }
+
+  document.getElementById("saveClientIdBtn").addEventListener("click", () => {
+    const clientId = document.getElementById("clientIdInput").value.trim();
+    if (!clientId) return alert("Please enter your Client ID first.");
+    localStorage.setItem(LS_CLIENT_ID, clientId);
+    initApp(clientId);
+  });
+};
+
+function initApp(clientId) {
+  document.getElementById("clientIdSection").classList.add("hidden");
+  document.getElementById("mainSection").classList.remove("hidden");
+
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: "openid email profile https://www.googleapis.com/auth/drive.file",
+    callback: async (tokenResponse) => {
+      if (tokenResponse.error) return;
+      accessToken = tokenResponse.access_token;
+      const profile = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+        headers: { Authorization: "Bearer " + accessToken },
+      }).then(res => res.json()).catch(() => null);
+      userEmail = profile?.email || "Unknown";
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        accessToken,
+        userEmail,
+        time: Date.now(),
+        clientId
+      }));
+      updateUI(true);
+    },
+  });
+
+  const saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+  if (saved && saved.clientId === clientId && Date.now() - saved.time < 45 * 60 * 1000) {
+    accessToken = saved.accessToken;
+    userEmail = saved.userEmail;
+    updateUI(true);
+  } else {
+    localStorage.removeItem(LS_KEY);
+    updateUI(false);
+  }
+
+  document.getElementById("loginBtn").addEventListener("click", () => {
+    tokenClient.requestAccessToken({ prompt: "consent" });
+  });
+  document.getElementById("logoutBtn").addEventListener("click", logout);
+}
+
+function logout() {
+  accessToken = null;
+  userEmail = null;
+  localStorage.removeItem(LS_KEY);
+  updateUI(false);
+}
+
+function updateUI(loggedIn) {
+  document.getElementById("loginBtn").style.display = loggedIn ? "none" : "inline-block";
+  document.getElementById("logoutBtn").style.display = loggedIn ? "inline-block" : "none";
+  document.getElementById("fileInput").disabled = !loggedIn;
+  document.getElementById("uploadBtn").disabled = !loggedIn;
+  document.getElementById("userInfo").innerText = loggedIn ? \`👋 Logged in as \${userEmail}\` : "";
+  document.getElementById("status").innerText = loggedIn ? "✅ Drive access active" : "❌ Not signed in";
+}
+
+async function uploadFile(file) {
+  const metadata = { name: file.name, mimeType: file.type };
   const form = new FormData();
   form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  form.append("file", new Blob([fileBuffer]));
-
+  form.append("file", file);
   const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
     method: "POST",
     headers: { Authorization: "Bearer " + accessToken },
     body: form,
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || "Upload failed.");
+  return data.id;
+}
 
-  // Make file public
-  await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
+async function makePublic(fileId) {
+  await fetch(\`https://www.googleapis.com/drive/v3/files/\${fileId}/permissions\`, {
     method: "POST",
     headers: {
       Authorization: "Bearer " + accessToken,
@@ -36,66 +180,49 @@ async function uploadFileToDrive(fileBuffer, fileName, accessToken, folderId) {
     },
     body: JSON.stringify({ role: "reader", type: "anyone" }),
   });
-
-  // Get public URLs
-  const linkRes = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${data.id}?fields=webViewLink,webContentLink`,
-    { headers: { Authorization: "Bearer " + accessToken } }
-  );
-  const links = await linkRes.json();
-
-  return {
-    success: true,
-    file_id: data.id,
-    view_url: links.webViewLink,
-    download_url: links.webContentLink,
-  };
+  const res = await fetch(\`https://www.googleapis.com/drive/v3/files/\${fileId}?fields=webViewLink,webContentLink\`, {
+    headers: { Authorization: "Bearer " + accessToken },
+  });
+  return await res.json();
 }
 
-// === 1️⃣ /auth endpoint ===
-// Note: this just returns the OAuth URL — Render can’t open popups.
-app.post("/auth", async (req, res) => {
-  try {
-    const { client_id, redirect_uri } = req.body;
-
-    if (!client_id) {
-      return res.status(400).json({ error: "Missing client_id" });
+document.addEventListener("click", async (e) => {
+  if (e.target.id === "uploadBtn") {
+    const file = document.getElementById("fileInput").files[0];
+    if (!file) return alert("Please select a file first.");
+    const visibility = document.querySelector('input[name="visibility"]:checked').value;
+    document.getElementById("status").innerText = "⏳ Uploading...";
+    document.getElementById("link").innerHTML = "";
+    try {
+      const id = await uploadFile(file);
+      if (visibility === "public") {
+        const links = await makePublic(id);
+        document.getElementById("status").innerText = "✅ Uploaded (Public)";
+        document.getElementById("link").innerHTML = \`
+          <p><b>View (Public):</b> <a href="\${links.webViewLink}" target="_blank">Open</a></p>
+          <p><b>Direct Download:</b> <a href="\${links.webContentLink}" target="_blank">Download</a></p>
+        \`;
+      } else {
+        document.getElementById("status").innerText = "✅ Uploaded (Private)";
+        document.getElementById("link").innerHTML = \`
+          <p><b>Private File ID:</b> \${id}</p>
+          <p><i>Only visible to you in your Google Drive.</i></p>
+        \`;
+      }
+    } catch (e) {
+      document.getElementById("status").innerText = "❌ Upload failed.";
     }
-
-    const redirect = encodeURIComponent(
-      redirect_uri || "https://developers.google.com/oauthplayground"
-    );
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${client_id}&response_type=token&scope=https://www.googleapis.com/auth/drive.file%20openid%20email&redirect_uri=${redirect}`;
-
-    res.json({
-      success: true,
-      auth_url: authUrl,
-      message: "Open this URL to authorize and get your access_token.",
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 });
-
-// === 2️⃣ /upload endpoint ===
-app.post("/upload", upload.single("file"), async (req, res) => {
-  try {
-    const { client_id, access_token, folder_id } = req.body;
-    const file = req.file;
-
-    if (!client_id) return res.status(400).json({ error: "Missing client_id" });
-    if (!access_token) return res.status(400).json({ error: "Missing access_token" });
-    if (!file) return res.status(400).json({ error: "No file uploaded" });
-
-    const result = await uploadFileToDrive(file.buffer, file.originalname, access_token, folder_id);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+</script>
+</body>
+</html>
+  `);
 });
 
-// === 3️⃣ Health check ===
-app.get("/", (req, res) => res.send("🚀 Drive API is live on Render!"));
+// health check
+app.get("/health", (req, res) => res.json({ status: "ok" }));
 
-// === Start server ===
-app.listen(PORT, () => console.log(`✅ Drive API running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Drive web app running at http://localhost:${PORT}`);
+});
