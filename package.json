@@ -1,11 +1,11 @@
 {
-  "name": "drive-api",
+  "name": "drive",
   "version": "1.0.0",
   "description": "Google Drive upload API for Render",
-  "main": "drive-api.js",
+  "main": "drive.js",
   "type": "module",
   "scripts": {
-    "start": "node drive-api.js"
+    "start": "node drive.js"
   },
   "dependencies": {
     "express": "^4.18.2",
