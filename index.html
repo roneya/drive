@@ -3,71 +3,133 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Google Drive Upload Demo</title>
+<title>Google Drive Upload</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   body {
-    font-family: Inter, sans-serif;
-    background: linear-gradient(135deg, #f0f4ff, #fefefe);
+    font-family: "Inter", system-ui, sans-serif;
+    background: linear-gradient(145deg, #f2f6ff, #ffffff);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     height: 100vh;
     margin: 0;
+  }
+
+  .card {
+    background: white;
+    padding: 30px 40px;
+    border-radius: 16px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.08);
     text-align: center;
+    width: 360px;
   }
-  h1 { color: #1a237e; margin-bottom: 5px; }
+
+  h1 {
+    color: #1a237e;
+    font-size: 1.6rem;
+    margin-bottom: 16px;
+  }
+
   input, button {
-    margin: 8px;
-    padding: 10px 20px;
-    font-size: 16px;
-    border: none;
+    width: 100%;
+    margin-top: 10px;
+    padding: 10px 14px;
+    font-size: 15px;
     border-radius: 8px;
-    cursor: pointer;
+    border: 1px solid #ccc;
+    box-sizing: border-box;
   }
+
+  input:focus {
+    border-color: #1565c0;
+    outline: none;
+  }
+
   button {
     background-color: #1565c0;
     color: white;
+    border: none;
+    cursor: pointer;
+    transition: 0.2s;
   }
+
+  button:hover:not(:disabled) {
+    background-color: #0d47a1;
+  }
+
   button:disabled {
     background-color: #ccc;
     cursor: not-allowed;
   }
-  #link a { color: #1565c0; text-decoration: none; }
+
   .hidden { display: none; }
-  .input-box {
-    margin: 10px;
-  }
+
   .radio-group {
     margin-top: 10px;
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+  }
+
+  #status {
+    margin-top: 10px;
+    color: #444;
+  }
+
+  #link a {
+    color: #1565c0;
+    text-decoration: none;
+  }
+
+  footer {
+    margin-top: 25px;
+    font-size: 14px;
+    color: #555;
+  }
+
+  footer a {
+    color: #1565c0;
+    text-decoration: none;
+  }
+
+  footer a:hover {
+    text-decoration: underline;
   }
 </style>
 </head>
 <body>
-  <h1>Google Drive Upload Demo</h1>
 
-  <div id="clientIdSection" class="input-box">
-    <p>Enter your <b>Google OAuth Client ID</b> to get started:</p>
-    <input type="text" id="clientIdInput" placeholder="your-client-id.apps.googleusercontent.com" size="40"/>
-    <button id="saveClientIdBtn">Continue</button>
-  </div>
+  <div class="card">
+    <h1>Google Drive Upload</h1>
 
-  <div id="mainSection" class="hidden">
-    <button id="loginBtn">Sign in with Google</button>
-    <button id="logoutBtn" style="display:none;background:#b71c1c;">Logout</button>
-    <p id="userInfo"></p>
-    <p id="status"></p>
-
-    <input type="file" id="fileInput" disabled />
-    <div class="radio-group">
-      <label><input type="radio" name="visibility" value="private" checked /> Private</label>
-      <label><input type="radio" name="visibility" value="public" /> Public</label>
+    <div id="clientIdSection">
+      <p>Enter your <b>Google OAuth Client ID</b> to continue:</p>
+      <input type="password" id="clientIdInput" placeholder="your-client-id.apps.googleusercontent.com" />
+      <button id="saveClientIdBtn">Continue</button>
     </div>
 
-    <button id="uploadBtn" disabled>Upload</button>
+    <div id="mainSection" class="hidden">
+      <button id="loginBtn">Sign in with Google</button>
+      <button id="logoutBtn" style="display:none;background:#b71c1c;">Logout</button>
 
-    <div id="link"></div>
+      <p id="userInfo"></p>
+      <p id="status"></p>
+
+      <input type="file" id="fileInput" disabled />
+      <div class="radio-group">
+        <label><input type="radio" name="visibility" value="private" checked /> Private</label>
+        <label><input type="radio" name="visibility" value="public" /> Public</label>
+      </div>
+
+      <button id="uploadBtn" disabled>Upload</button>
+      <div id="link"></div>
+    </div>
+
+    <footer>
+      © 2025 <a href="https://www.linkedin.com/in/iamrohanvidhate" target="_blank">Rohan Vidhate</a>
+    </footer>
   </div>
 
 <script>
@@ -103,7 +165,6 @@
         if (tokenResponse.error) return;
         accessToken = tokenResponse.access_token;
 
-        // ✅ Fetch user info
         const profile = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
           headers: { Authorization: "Bearer " + accessToken },
         }).then(res => res.json()).catch(() => null);
@@ -121,7 +182,6 @@
       },
     });
 
-    // Restore session
     const saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
     if (saved && saved.clientId === clientId && Date.now() - saved.time < 45 * 60 * 1000) {
       accessToken = saved.accessToken;
@@ -196,23 +256,19 @@
 
       try {
         const id = await uploadFile(file);
-
         if (visibility === "public") {
           const links = await makePublic(id);
           document.getElementById("status").innerText = "✅ Uploaded (Public)";
           document.getElementById("link").innerHTML = `
             <p><b>View (Public):</b> <a href="${links.webViewLink}" target="_blank">Open</a></p>
-            <p><b>Direct Download:</b> <a href="${links.webContentLink}" target="_blank">Download</a></p>
-          `;
+            <p><b>Direct Download:</b> <a href="${links.webContentLink}" target="_blank">Download</a></p>`;
         } else {
           document.getElementById("status").innerText = "✅ Uploaded (Private)";
           document.getElementById("link").innerHTML = `
             <p><b>Private File ID:</b> ${id}</p>
-            <p><i>Only visible to you in your Google Drive.</i></p>
-          `;
+            <p><i>Only visible to you in your Google Drive.</i></p>`;
         }
-
-      } catch (e) {
+      } catch {
         document.getElementById("status").innerText = "❌ Upload failed.";
       }
     }
